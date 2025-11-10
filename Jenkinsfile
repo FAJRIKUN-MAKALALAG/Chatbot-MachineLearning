@@ -3,13 +3,17 @@ pipeline {
 
   options {
     timestamps()
-    ansiColor('xterm')
+  }
+
+  triggers {
+    // Poll SCM setiap ~2 menit untuk fallback bila webhook tidak aktif
+    pollSCM('H/2 * * * *')
+    // Trigger build saat ada push GitHub (butuh GitHub plugin di Jenkins)
+    githubPush()
   }
 
   environment {
-    // Ganti dengan nomor WhatsApp Anda (format internasional), atau biarkan kosong untuk melewati tes
     FONNTE_TEST_TARGET = '62882019908677'
-    // Opsional: ubah endpoint bila diperlukan
     FONNTE_SEND_URL = 'https://api.fonnte.com/send'
   }
 
@@ -43,34 +47,30 @@ pipeline {
     }
 
     stage('Fonnte Connectivity Test') {
-      when {
-        expression { env.FONNTE_TEST_TARGET?.trim() != '' }
-      }
       steps {
         withCredentials([
           string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')
         ]) {
           sh '''
             set -euxo pipefail
-            FONNTE_SEND_URL="${FONNTE_SEND_URL:-https://api.fonnte.com/send}"
-            TARGET="${FONNTE_TEST_TARGET}"
-            MSG="[Jenkins] Tes konektivitas Fonnte OK pada $(date +'%F %T'). Jika Anda menerima pesan ini, token & koneksi Fonnte berfungsi."
-            echo "Mengirim pesan uji ke ${TARGET} ..."
-            RESP=$(curl -sS -X POST "$FONNTE_SEND_URL" \
-              -H "Authorization: ${FONNTE_TOKEN}" \
-              --data-urlencode "target=${TARGET}" \
-              --data-urlencode "message=${MSG}" || true)
-            echo "Fonnte response: $RESP"
+            if [ -n "${FONNTE_TEST_TARGET}" ]; then
+              FONNTE_SEND_URL="${FONNTE_SEND_URL:-https://api.fonnte.com/send}"
+              MSG="[Jenkins] Tes konektivitas Fonnte OK pada $(date +'%F %T'). Jika Anda menerima pesan ini, token & koneksi Fonnte berfungsi."
+              echo "Mengirim pesan uji ke ${FONNTE_TEST_TARGET} ..."
+              RESP=$(curl -sS -X POST "$FONNTE_SEND_URL" \
+                -H "Authorization: ${FONNTE_TOKEN}" \
+                --data-urlencode "target=${FONNTE_TEST_TARGET}" \
+                --data-urlencode "message=${MSG}" || true)
+              echo "Fonnte response: $RESP"
+            else
+              echo "Lewati tes Fonnte: FONNTE_TEST_TARGET kosong."
+            fi
           '''
         }
       }
     }
 
     stage('Run/Reload PM2 (Gunicorn)') {
-      environment {
-        // Names of Jenkins string credentials to load
-        // Create credentials with IDs: GEMINI_API_KEY and FONNTE_TOKEN
-      }
       steps {
         withCredentials([
           string(credentialsId: 'GEMINI_API_KEY', variable: 'GEMINI_API_KEY'),
