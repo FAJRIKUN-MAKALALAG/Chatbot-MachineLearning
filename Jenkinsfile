@@ -27,7 +27,7 @@ pipeline {
     stage('Setup Python venv') {
       steps {
         sh '''
-          set -euxo pipefail
+          set -eu
           if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
           $PY -m venv venv
           . venv/bin/activate
@@ -39,7 +39,7 @@ pipeline {
     stage('Install dependencies') {
       steps {
         sh '''
-          set -euxo pipefail
+          set -eu
           . venv/bin/activate
           pip install -r requirements.txt
         '''
@@ -52,7 +52,7 @@ pipeline {
           string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')
         ]) {
           sh '''
-            set -euxo pipefail
+            set -eu
             if [ -n "${FONNTE_TEST_TARGET}" ]; then
               FONNTE_SEND_URL="${FONNTE_SEND_URL:-https://api.fonnte.com/send}"
               MSG="[Jenkins] Tes konektivitas Fonnte OK pada $(date +'%F %T'). Jika Anda menerima pesan ini, token & koneksi Fonnte berfungsi."
@@ -77,7 +77,7 @@ pipeline {
           string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')
         ]) {
           sh '''
-            set -euxo pipefail
+            set -eu
             # Ensure pm2 exists
             command -v pm2 >/dev/null 2>&1
 
