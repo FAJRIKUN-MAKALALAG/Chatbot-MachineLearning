@@ -8,7 +8,7 @@ pipeline {
 
   environment {
     // Ganti dengan nomor WhatsApp Anda (format internasional), atau biarkan kosong untuk melewati tes
-    FONNTE_TEST_TARGET = ''
+    FONNTE_TEST_TARGET = '62882019908677'
     // Opsional: ubah endpoint bila diperlukan
     FONNTE_SEND_URL = 'https://api.fonnte.com/send'
   }
@@ -44,7 +44,7 @@ pipeline {
 
     stage('Fonnte Connectivity Test') {
       when {
-        expression { return env.FONNTE_TEST_TARGET?.trim() }
+        expression { env.FONNTE_TEST_TARGET?.trim() != '' }
       }
       steps {
         withCredentials([
