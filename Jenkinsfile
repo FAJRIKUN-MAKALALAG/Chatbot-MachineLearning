@@ -46,6 +46,32 @@ pipeline {
       }
     }
 
+    stage('Install Node.js & PM2') {
+      steps {
+        sh '''
+          set -eu
+          if command -v pm2 >/dev/null 2>&1; then
+            echo "pm2 already installed: $(pm2 -v)"
+          else
+            if command -v npm >/dev/null 2>&1; then
+              npm install -g pm2
+            elif command -v apt-get >/dev/null 2>&1; then
+              apt-get update -y
+              apt-get install -y nodejs npm
+              npm install -g pm2
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y nodejs npm || true
+              npm install -g pm2
+            else
+              echo "Node.js/npm tidak ditemukan dan package manager tidak dikenali. Instal Node.js & npm secara manual lalu jalankan ulang pipeline."
+              exit 1
+            fi
+          fi
+          pm2 -v
+        '''
+      }
+    }
+
     stage('Fonnte Connectivity Test') {
       steps {
         withCredentials([
