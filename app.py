@@ -1,5 +1,5 @@
 # ============================================================
-# 🤖 WhatsApp AI Gizi Anak – Flask Webhook Server (Group & Personal)
+# 🤖 WhatsApp AI Gizi Anak – Flask Webhook Server (Group & Personal, Markdown Rapi)
 # ============================================================
 from flask import Flask, request, jsonify
 import requests
@@ -40,28 +40,32 @@ def get_ai_response(user_message: str) -> str:
         prompt = f"""
 Anda adalah *AI-Gizi-Anak*, asisten edukasi kesehatan anak.
 
-🎯 **Fokus Utama:** gizi anak, stunting, nutrisi balita, pola makan sehat, tumbuh kembang, dan tips parenting sehat.
+🎯 **Fokus Utama:** gizi anak, stunting, nutrisi balita, pola makan sehat, tumbuh kembang, tips parenting sehat.
 
 🧩 **Aturan:**
 - Jawab maksimal 200 kata.
 - Gunakan *markdown* agar tampil rapi di WhatsApp.
-- Jika pertanyaan di luar topik gizi anak atau stunting, jawab:
+- Jika pertanyaan di luar topik gizi anak/stunting, jawab:
   "Maaf, saya hanya bisa membantu seputar gizi anak dan stunting."
 - Gaya bahasa: ramah, sopan, dan edukatif.
-- Jika user menyapa (halo, hai, pagi, dsb), sambut hangat dan arahkan ke topik gizi anak.
+- Jika user menyapa (halo, hai, dsb), sambut hangat dan arahkan ke topik gizi anak.
 
 Pesan pengguna:
 \"\"\"{user_message}\"\"\"
+
+✍️ Jawaban:
 """
         response = model.generate_content(
-            prompt, 
-            request_options={"timeout": 30}  # 🔹 timeout lebih panjang
+            prompt,
+            request_options={"timeout": 30}
         )
         # batasi kata
         text = response.text.strip()
         words = text.split()
         if len(words) > 200:
             text = " ".join(words[:200]) + "..."
+        # rapikan markdown: pastikan garis pemisah dan bold
+        text = f"---\n{text}\n---"
         return text
     except Exception as e:
         logging.error(f"⚠️ Error dari Gemini: {e}")
@@ -99,8 +103,7 @@ def webhook():
         sender = payload.get("sender") or payload.get("from") or payload.get("number")
         message = payload.get("message") or payload.get("text")
         is_group = payload.get("isgroup", False)
-        group_id = payload.get("group_id")
-        member_id = payload.get("member")  # pengirim asli di group
+        group_id = payload.get("sender") if is_group else None
 
         if not sender or not message:
             return jsonify({"ok": False, "error": "Payload tidak valid"}), 400
@@ -108,22 +111,23 @@ def webhook():
         message_lower = message.lower().strip()
         sapaan = ["halo", "hai", "hallo", "pagi", "siang", "malam", "hey", "hei"]
 
-        # 🔹 Trigger mention @aigizi
+        # 🔹 Trigger mention @aigizi untuk group
         trigger = "@aigizi"
         if trigger in message_lower:
             user_message = message_lower.replace(trigger, "").strip()
             ai_reply = get_ai_response(user_message)
-            # kirim ke group jika dari group, personal jika bukan
             target = group_id if is_group else sender
             send_result = send_message_to_fonnte(target, ai_reply)
+
         elif any(word in message_lower for word in sapaan):
             ai_reply = (
                 "👋 Hai! Saya *AI-Gizi-Anak*, asisten edukasi kesehatan.\n\n"
-                "Saya siap bantu kamu memahami seputar *gizi anak, stunting, dan nutrisi seimbang.* "
+                "Saya siap bantu kamu memahami seputar *gizi anak, stunting, dan nutrisi seimbang.*\n"
                 "Silakan tanya apa yang ingin kamu ketahui 😊"
             )
             target = group_id if is_group else sender
             send_result = send_message_to_fonnte(target, ai_reply)
+
         else:
             ai_reply = get_ai_response(message)
             target = group_id if is_group else sender
