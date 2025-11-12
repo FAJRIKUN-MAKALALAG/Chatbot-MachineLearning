@@ -3,7 +3,7 @@ pipeline {
   options { timestamps() }
 
   triggers {
-    // Poll SCM setiap 2 menit dan aktifkan webhook GitHub
+    // Jalankan otomatis saat push dan polling tiap 2 menit
     pollSCM('H/2 * * * *')
     githubPush()
   }
@@ -12,7 +12,7 @@ pipeline {
     APP_NAME = 'whatsapp-health-bot'
     APP_PORT = '8000'
     FONNTE_SEND_URL = 'https://api.fonnte.com/send'
-    FONNTE_TEST_TARGET = '62882019908677'
+    FONNTE_TEST_TARGET = '62882019908677' // Nomor WA kamu untuk notifikasi build
   }
 
   stages {
@@ -22,7 +22,7 @@ pipeline {
       }
     }
 
-    stage('Setup Python venv') {
+    stage('Setup Python Environment') {
       steps {
         sh '''
           set -eu
@@ -40,24 +40,21 @@ pipeline {
         sh '''
           set -eu
           if ! command -v pm2 >/dev/null 2>&1; then
-            echo "🔧 Menginstall PM2..."
+            echo "🔧 Menginstal PM2..."
             if command -v npm >/dev/null 2>&1; then
               npm install -g pm2
             elif command -v apt-get >/dev/null 2>&1; then
               apt-get update -y
               apt-get install -y nodejs npm
               npm install -g pm2
-            else
-              echo "❌ Node.js/npm tidak ditemukan dan tidak bisa diinstal."
-              exit 1
             fi
           fi
-          echo "✅ PM2 terpasang versi: $(pm2 -v)"
+          echo "✅ PM2 versi: $(pm2 -v)"
         '''
       }
     }
 
-    stage('Deploy App with PM2 (Auto Reload)') {
+    stage('Deploy App (PM2 + Gunicorn)') {
       steps {
         withCredentials([
           string(credentialsId: 'GEMINI_API_KEY', variable: 'GEMINI_API_KEY'),
@@ -66,11 +63,10 @@ pipeline {
           sh '''
             set -eu
             . venv/bin/activate
-
             export GEMINI_API_KEY="${GEMINI_API_KEY}"
             export FONNTE_TOKEN="${FONNTE_TOKEN}"
 
-            echo "🚀 Menjalankan / reload ${APP_NAME}..."
+            echo "🚀 Menjalankan ${APP_NAME}..."
             if pm2 describe "${APP_NAME}" >/dev/null 2>&1; then
               pm2 reload "${APP_NAME}" --update-env
             else
@@ -88,14 +84,12 @@ pipeline {
     stage('Expose Port & Show Public IP') {
       steps {
         sh '''
-          echo "🔓 Membuka port ${APP_PORT} untuk akses publik..."
+          echo "🔓 Membuka port ${APP_PORT}..."
           if command -v ufw >/dev/null 2>&1; then
             sudo ufw allow ${APP_PORT} || true
           elif command -v firewall-cmd >/dev/null 2>&1; then
             sudo firewall-cmd --add-port=${APP_PORT}/tcp --permanent || true
             sudo firewall-cmd --reload || true
-          else
-            echo "⚠️ Firewall manager tidak ditemukan, lewati buka port."
           fi
 
           PUBLIC_IP=$(curl -s ifconfig.me || echo "Tidak bisa ambil IP publik")
