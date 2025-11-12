@@ -1,11 +1,12 @@
 # ============================================================
-# 🤖 WhatsApp AI Gizi Anak – Flask Webhook Server (Personal Only)
+# 🤖 WhatsApp AI Gizi Anak – Flask Webhook Server (Group & Personal, Markdown Rapi)
 # ============================================================
 from flask import Flask, request, jsonify
 import requests
 import google.generativeai as genai
 import logging
 import os
+import re
 
 # ------------------------------------------------------------
 # 🔧 KONFIGURASI DASAR
@@ -98,6 +99,8 @@ def webhook():
 
         sender = payload.get("sender") or payload.get("from") or payload.get("number")
         message = payload.get("message") or payload.get("text")
+        is_group = payload.get("isgroup", False)
+        group_id = payload.get("sender") if is_group else None
 
         if not sender or not message:
             return jsonify({"ok": False, "error": "Payload tidak valid"}), 400
@@ -105,16 +108,28 @@ def webhook():
         message_lower = message.lower().strip()
         sapaan = ["halo", "hai", "hallo", "pagi", "siang", "malam", "hey", "hei"]
 
-        if any(word in message_lower for word in sapaan):
+        # 🔹 Trigger mention @aigizi untuk group
+        trigger = "@aigizi"
+        if trigger in message_lower:
+            user_message = message_lower.replace(trigger, "").strip()
+            ai_reply = get_ai_response(user_message)
+            target = group_id if is_group else sender
+            send_result = send_message_to_fonnte(target, ai_reply)
+
+        elif any(word in message_lower for word in sapaan):
             ai_reply = (
                 "👋 Hai! Saya AI-Gizi-Anak, asisten edukasi kesehatan.\n\n"
                 "Saya siap bantu kamu memahami seputar gizi anak, stunting, dan nutrisi seimbang.\n"
                 "Silakan tanya apa yang ingin kamu ketahui 😊"
             )
+            target = group_id if is_group else sender
+            send_result = send_message_to_fonnte(target, ai_reply)
+
         else:
             ai_reply = get_ai_response(message)
+            target = group_id if is_group else sender
+            send_result = send_message_to_fonnte(target, ai_reply)
 
-        send_result = send_message_to_fonnte(sender, ai_reply)
         return jsonify({"ok": True, "sent": send_result}), 200
 
     except Exception as e:
