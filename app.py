@@ -1,12 +1,12 @@
 # ============================================================
-# 🤖 WhatsApp AI Gizi Anak – Flask Webhook Server (UPDATE)
+# 🤖 WhatsApp AI Gizi Anak – Flask Webhook Server (FULL UPDATE)
 # ============================================================
 from flask import Flask, request, jsonify
 import requests
 import google.generativeai as genai
 import logging
 import os
-import re  # 🔹 UPDATE: import regex untuk parsing perintah kirim ke nomor lain
+import re
 
 # ------------------------------------------------------------
 # 🔧 KONFIGURASI DASAR
@@ -29,27 +29,26 @@ genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
 # ------------------------------------------------------------
-# 🧠 FUNGSI RESPON AI
+# 🧠 FUNGSI RESPON AI (Markdown + max 500 kata)
 # ------------------------------------------------------------
 def get_ai_response(user_message: str) -> str:
     try:
         prompt = f"""
 Anda adalah *AI-Gizi-Anak*, asisten edukasi kesehatan anak.
-
-🎯 **Fokus Utama:** gizi anak, stunting, nutrisi balita, pola makan sehat, tumbuh kembang, dan tips parenting sehat.
-
-🧩 **Aturan:**
-- Jika pertanyaan di luar topik gizi anak atau stunting, jawab:
-  "Maaf, saya hanya bisa membantu seputar gizi anak dan stunting."
-- Gunakan *markdown* agar tampilan pesan rapi di WhatsApp.
-- Gaya bahasa: ramah, sopan, dan edukatif.
-- Jika user menyapa (halo, hai, pagi, dsb), sambut hangat dan arahkan ke topik gizi anak.
+🎯 Fokus: gizi anak, stunting, nutrisi balita, pola makan sehat, tumbuh kembang, tips parenting.
+🧩 Aturan:
+- Jawaban maksimal 500 kata
+- Gunakan Markdown agar tampil rapi di WhatsApp
+- Ramah, sopan, edukatif
+- Jika di luar topik gizi anak/stunting, jawab: "Maaf, saya hanya bisa membantu seputar gizi anak dan stunting."
 
 Pesan pengguna:
 \"\"\"{user_message}\"\"\"
 """
         response = model.generate_content(prompt, request_options={"timeout": 15})
-        return response.text.strip()
+        # Truncate jika lebih dari 200 kata
+        words = response.text.strip().split()
+        return " ".join(words[:200])
     except Exception as e:
         logging.error(f"⚠️ Error dari Gemini: {e}")
         return "_Maaf, sistem sedang sibuk. Coba lagi nanti ya._"
@@ -57,22 +56,22 @@ Pesan pengguna:
 # ------------------------------------------------------------
 # 📤 KIRIM PESAN KE FONNTE
 # ------------------------------------------------------------
-def send_message_to_fonnte(phone: str, message: str):
+def send_message_to_fonnte(target: str, message: str):
     url = "https://api.fonnte.com/send"
     headers = {"Authorization": FONNTE_TOKEN}
-    data = {"target": phone, "message": message, "countryCode": "62"}
+    data = {"target": target, "message": message, "countryCode": "62"}
 
     try:
         resp = requests.post(url, headers=headers, data=data, timeout=10)
         resp.raise_for_status()
-        logging.info(f"✅ Balasan terkirim ke {phone}: {message[:60]}...")
+        logging.info(f"✅ Balasan terkirim ke {target}: {message[:60]}...")
         return resp.json()
     except Exception as e:
         logging.error(f"❌ Gagal kirim pesan ke Fonnte: {e}")
         return {"sent": False, "error": str(e)}
 
 # ------------------------------------------------------------
-# 🌐 WEBHOOK FONNTE UNTUK TERIMA PESAN
+# 🌐 WEBHOOK FONNTE
 # ------------------------------------------------------------
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
@@ -83,8 +82,10 @@ def webhook():
         payload = request.get_json(force=True)
         logging.info(f"📩 Pesan masuk: {payload}")
 
-        sender = payload.get("sender") or payload.get("from") or payload.get("number")
+        sender = payload.get("sender")
+        group_id = payload.get("group_id")
         message = payload.get("message") or payload.get("text")
+        is_group = payload.get("isgroup", False)
 
         if not sender or not message:
             return jsonify({"ok": False, "error": "Payload tidak valid"}), 400
@@ -92,24 +93,36 @@ def webhook():
         message_lower = message.lower().strip()
         sapaan = ["halo", "hai", "hallo", "pagi", "siang", "malam", "hey", "hei"]
 
-        # 🔹 UPDATE: Cek apakah user minta kirim ke nomor lain
-        pattern = r"kirim pesan ke nomor (\d+) tentang (.+)"
-        match = re.search(pattern, message_lower)
+        # 🔹 1. Cek perintah kirim ke nomor lain
+        pattern_send_number = r"kirim pesan ke nomor (\d+) tentang (.+)"
+        match_number = re.search(pattern_send_number, message_lower)
 
-        if match:
-            target_number = match.group(1)
-            message_to_send = match.group(2)
+        if match_number:
+            target_number = match_number.group(1)
+            message_to_send = match_number.group(2)
             send_result = send_message_to_fonnte(target_number, message_to_send)
             ai_reply = f"✅ Pesan berhasil dikirim ke {target_number}"
+
+        # 🔹 2. Chat di group dengan mention @aigizi
+        elif is_group and "@aigizi" in message_lower:
+            # Hapus mention sebelum dikirim ke AI
+            user_message = message.replace("@aigizi", "").strip()
+            ai_reply = get_ai_response(user_message)
+            send_result = send_message_to_fonnte(group_id, ai_reply)
+            return jsonify({"ok": True, "sent": send_result}), 200
+
+        # 🔹 3. Chat pribadi dengan sapaan
         elif any(word in message_lower for word in sapaan):
             ai_reply = (
                 "👋 Hai! Saya *AI-Gizi-Anak*, asisten edukasi kesehatan.\n\n"
-                "Saya siap bantu kamu memahami seputar *gizi anak, stunting, dan nutrisi seimbang.* "
                 "Silakan tanya apa yang ingin kamu ketahui 😊"
             )
+
+        # 🔹 4. Chat pribadi lain
         else:
             ai_reply = get_ai_response(message)
 
+        # Kirim balasan ke pengirim di chat pribadi
         result = send_message_to_fonnte(sender, ai_reply)
         return jsonify({"ok": True, "sent": result}), 200
 
