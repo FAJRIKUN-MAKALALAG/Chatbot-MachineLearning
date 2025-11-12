@@ -12,7 +12,7 @@ pipeline {
     APP_NAME = 'whatsapp-health-bot'
     APP_PORT = '8000'
     FONNTE_SEND_URL = 'https://api.fonnte.com/send'
-    FONNTE_TEST_TARGET = '62882019908677' // Nomor WA kamu untuk notifikasi build
+    FONNTE_TEST_TARGET = '62882019908677' // Nomor WA untuk notifikasi dan tes webhook
   }
 
   stages {
@@ -81,7 +81,7 @@ pipeline {
       }
     }
 
-    stage('Expose Port & Show Public IP') {
+    stage('Expose Port & Check Public URL') {
       steps {
         sh '''
           echo "🔓 Membuka port ${APP_PORT}..."
@@ -93,8 +93,37 @@ pipeline {
           fi
 
           PUBLIC_IP=$(curl -s ifconfig.me || echo "Tidak bisa ambil IP publik")
-          echo "🌍 Aplikasi aktif di: http://${PUBLIC_IP}:${APP_PORT}/webhook"
+          echo "🌍 URL Aplikasi: http://${PUBLIC_IP}:${APP_PORT}/webhook"
+          echo $PUBLIC_IP > public_ip.txt
         '''
+      }
+    }
+
+    // ✅ Tahap tambahan: Auto Test Webhook setelah deploy
+    stage('Auto Test Webhook & Notifikasi') {
+      steps {
+        withCredentials([string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')]) {
+          sh '''
+            PUBLIC_IP=$(cat public_ip.txt)
+            WEBHOOK_URL="http://${PUBLIC_IP}:${APP_PORT}/webhook"
+            echo "🔍 Mengecek webhook di $WEBHOOK_URL..."
+
+            RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$WEBHOOK_URL")
+            if [ "$RESPONSE" = "200" ]; then
+              echo "✅ Webhook aktif dan merespons OK!"
+              STATUS_MSG="Webhook aktif ✅"
+            else
+              echo "❌ Webhook tidak merespons (HTTP $RESPONSE)"
+              STATUS_MSG="Webhook tidak merespons ❌ (HTTP $RESPONSE)"
+            fi
+
+            MSG="🤖 *Bot WhatsApp Gizi Anak Aktif!*%0AStatus: ${STATUS_MSG}%0AURL: ${WEBHOOK_URL}%0AHost: $(hostname)"
+            curl -sS -X POST "$FONNTE_SEND_URL" \
+              -H "Authorization: ${FONNTE_TOKEN}" \
+              --data-urlencode "target=${FONNTE_TEST_TARGET}" \
+              --data-urlencode "message=${MSG}"
+          '''
+        }
       }
     }
   }
@@ -102,18 +131,6 @@ pipeline {
   post {
     success {
       echo '✅ Build berhasil!'
-      withCredentials([string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')]) {
-        sh '''
-          MSG="✅ *Build Sukses* untuk ${APP_NAME} pada $(date +'%F %T')"
-          MSG="$MSG%0AStatus: SUCCESS"
-          MSG="$MSG%0AHost: $(hostname)"
-          MSG="$MSG%0AURL: http://$(curl -s ifconfig.me):${APP_PORT}/webhook"
-          curl -sS -X POST "$FONNTE_SEND_URL" \
-            -H "Authorization: ${FONNTE_TOKEN}" \
-            --data-urlencode "target=${FONNTE_TEST_TARGET}" \
-            --data-urlencode "message=${MSG}"
-        '''
-      }
     }
 
     failure {
