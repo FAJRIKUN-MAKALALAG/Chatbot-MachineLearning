@@ -6,45 +6,43 @@ pipeline {
   }
 
   triggers {
-    pollSCM('H/2 * * * *')   // Fallback polling tiap 2 menit
-    githubPush()              // Trigger build saat push ke repo
+    // Poll SCM setiap ~2 menit untuk fallback bila webhook tidak aktif
+    pollSCM('H/2 * * * *')
+    // Trigger build saat ada push GitHub (butuh GitHub plugin di Jenkins)
+    githubPush()
   }
 
   environment {
-    APP_NAME = 'whatsapp-health-bot'
-    APP_PORT = '8000'
+    FONNTE_TEST_TARGET = '62882019908677'   // Nomor WhatsApp admin / dev
     FONNTE_SEND_URL = 'https://api.fonnte.com/send'
-    FONNTE_TEST_TARGET = '62882019908677'
+    APP_NAME = 'whatsapp-health-bot'
   }
 
   stages {
-    stage('Checkout Source') {
+    stage('Checkout') {
       steps {
         checkout scm
       }
     }
 
-    stage('Setup Python Environment') {
+    stage('Setup Python venv') {
       steps {
         sh '''
           set -eu
-          if ! command -v python3 >/dev/null 2>&1; then
-            echo "❌ Python3 belum terinstal! Jalankan: sudo apt install python3 python3-venv -y"
-            exit 1
-          fi
-          python3 -m venv venv
+          if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
+          $PY -m venv venv
           . venv/bin/activate
           pip install --upgrade pip
         '''
       }
     }
 
-    stage('Install Dependencies') {
+    stage('Install dependencies') {
       steps {
         sh '''
           set -eu
           . venv/bin/activate
-          pip install -r requirements.txt || pip install flask requests google-generativeai gunicorn
+          pip install -r requirements.txt
         '''
       }
     }
@@ -53,35 +51,29 @@ pipeline {
       steps {
         sh '''
           set -eu
-          if ! command -v pm2 >/dev/null 2>&1; then
-            echo "🔧 Menginstal Node.js dan PM2..."
-            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-            sudo apt-get install -y nodejs
-            sudo npm install -g pm2
+          if command -v pm2 >/dev/null 2>&1; then
+            echo "pm2 already installed: $(pm2 -v)"
+          else
+            if command -v npm >/dev/null 2>&1; then
+              npm install -g pm2
+            elif command -v apt-get >/dev/null 2>&1; then
+              apt-get update -y
+              apt-get install -y nodejs npm
+              npm install -g pm2
+            elif command -v yum >/dev/null 2>&1; then
+              yum install -y nodejs npm || true
+              npm install -g pm2
+            else
+              echo "Node.js/npm tidak ditemukan dan package manager tidak dikenali."
+              exit 1
+            fi
           fi
           pm2 -v
         '''
       }
     }
 
-    stage('Test Fonnte Connectivity') {
-      steps {
-        withCredentials([string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')]) {
-          sh '''
-            set -eu
-            MSG="[Jenkins] Tes konektivitas Fonnte berhasil dijalankan pada $(date +'%F %T')."
-            echo "Mengirim pesan uji ke ${FONNTE_TEST_TARGET} ..."
-            RESP=$(curl -sS -X POST "${FONNTE_SEND_URL}" \
-              -H "Authorization: ${FONNTE_TOKEN}" \
-              --data-urlencode "target=${FONNTE_TEST_TARGET}" \
-              --data-urlencode "message=${MSG}" || true)
-            echo "Fonnte response: $RESP"
-          '''
-        }
-      }
-    }
-
-    stage('Deploy / Reload Webhook') {
+    stage('Run/Reload App with PM2') {
       steps {
         withCredentials([
           string(credentialsId: 'GEMINI_API_KEY', variable: 'GEMINI_API_KEY'),
@@ -89,18 +81,19 @@ pipeline {
         ]) {
           sh '''
             set -eu
+            command -v pm2 >/dev/null 2>&1
+
             . venv/bin/activate
 
+            # Export env for Gunicorn
             export GEMINI_API_KEY="${GEMINI_API_KEY}"
             export FONNTE_TOKEN="${FONNTE_TOKEN}"
 
-            CMD="venv/bin/gunicorn -w 2 -b 0.0.0.0:${APP_PORT} app:app"
-
-            echo "🚀 Menjalankan ${APP_NAME} di port ${APP_PORT} ..."
-            if pm2 describe ${APP_NAME} >/dev/null 2>&1; then
-              pm2 reload ${APP_NAME} --update-env
+            echo "Starting app: ${APP_NAME} ..."
+            if pm2 describe "${APP_NAME}" >/dev/null 2>&1; then
+              pm2 reload "${APP_NAME}" --update-env
             else
-              pm2 start "$CMD" --name ${APP_NAME} --update-env
+              pm2 start "venv/bin/gunicorn -w 2 -b 0.0.0.0:8000 app:app" --name "${APP_NAME}" --update-env
             fi
 
             pm2 save
@@ -109,24 +102,39 @@ pipeline {
         }
       }
     }
-
-    stage('Show Webhook URL') {
-      steps {
-        script {
-          def ip = sh(script: "hostname -I | awk '{print $1}'", returnStdout: true).trim()
-          echo "🌐 Webhook aktif di: http://${ip}:${APP_PORT}/webhook"
-          echo "Pastikan port ${APP_PORT} dibuka melalui UFW atau firewall VPS."
-        }
-      }
-    }
   }
 
   post {
     success {
-      echo "✅ Build sukses! Webhook siap diakses dari Fonnte atau WhatsApp Gateway."
+      echo '✅ Build berhasil!'
+      withCredentials([string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')]) {
+        sh '''
+          MSG="✅ *Build Sukses* untuk ${APP_NAME} pada $(date +'%F %T')"
+          MSG="$MSG%0A%0AStatus: SUCCESS"
+          MSG="$MSG%0AHost: $(hostname)"
+          MSG="$MSG%0A"
+          curl -sS -X POST "$FONNTE_SEND_URL" \
+            -H "Authorization: ${FONNTE_TOKEN}" \
+            --data-urlencode "target=${FONNTE_TEST_TARGET}" \
+            --data-urlencode "message=${MSG}"
+        '''
+      }
     }
+
     failure {
-      echo "❌ Build gagal. Cek log Jenkins dan environment variable."
+      echo '❌ Build gagal!'
+      withCredentials([string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')]) {
+        sh '''
+          MSG="❌ *Build Gagal* untuk ${APP_NAME} pada $(date +'%F %T')"
+          MSG="$MSG%0A%0AStatus: FAILED"
+          MSG="$MSG%0AHost: $(hostname)"
+          MSG="$MSG%0APeriksa log di Jenkins untuk detail error."
+          curl -sS -X POST "$FONNTE_SEND_URL" \
+            -H "Authorization: ${FONNTE_TOKEN}" \
+            --data-urlencode "target=${FONNTE_TEST_TARGET}" \
+            --data-urlencode "message=${MSG}"
+        '''
+      }
     }
   }
 }

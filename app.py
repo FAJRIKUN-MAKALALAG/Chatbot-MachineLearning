@@ -1,140 +1,168 @@
-pipeline {
-  agent any
+import os
+import logging
+from flask import Flask, request, jsonify
+import requests
 
-  options {
-    timestamps()
-  }
+# =====================================================
+# 🔧 Konfigurasi Aman dari Environment
+# =====================================================
+# Sekarang semua API key diambil dari environment variable
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+FONNTE_TOKEN = os.getenv("FONNTE_TOKEN")
+FONNTE_SEND_URL = "https://api.fonnte.com/send"
 
-  triggers {
-    // Poll SCM setiap ~2 menit untuk fallback bila webhook tidak aktif
-    pollSCM('H/2 * * * *')
-    // Trigger build saat ada push GitHub (butuh GitHub plugin di Jenkins)
-    githubPush()
-  }
+# =====================================================
+# 🧠 Konfigurasi Logging
+# =====================================================
+LOG_FILE = "chatbot.log"
+logger = logging.getLogger("whatsapp_health_bot")
+logger.setLevel(logging.INFO)
+_fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+_fh.setFormatter(logging.Formatter("%(asctime)s\t%(levelname)s\t%(message)s"))
+logger.addHandler(_fh)
 
-  environment {
-    FONNTE_TEST_TARGET = '62882019908677'   // Nomor WhatsApp admin / dev
-    FONNTE_SEND_URL = 'https://api.fonnte.com/send'
-    APP_NAME = 'whatsapp-health-bot'
-  }
+# =====================================================
+# 🚀 Inisialisasi Flask
+# =====================================================
+app = Flask(__name__)
 
-  stages {
-    stage('Checkout') {
-      steps {
-        checkout scm
-      }
-    }
+# =====================================================
+# 🧩 Inisialisasi Gemini
+# =====================================================
+try:
+    import google.generativeai as genai
+except Exception:
+    genai = None
 
-    stage('Setup Python venv') {
-      steps {
-        sh '''
-          set -eu
-          if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
-          $PY -m venv venv
-          . venv/bin/activate
-          pip install --upgrade pip
-        '''
-      }
-    }
+_model = None
 
-    stage('Install dependencies') {
-      steps {
-        sh '''
-          set -eu
-          . venv/bin/activate
-          pip install -r requirements.txt
-        '''
-      }
-    }
+SYSTEM_INSTRUCTION = (
+    "Anda adalah asisten edukasi kesehatan (gaya hidup sehat, nutrisi, kebersihan, "
+    "stunting, dan gizi anak). Jawab SINGKAT, jelas, dan praktis dalam Bahasa Indonesia "
+    "(sekitar 3–6 kalimat). Berikan langkah yang dapat dipraktikkan, sertakan peringatan "
+    "jika perlu. Jika ada pertanyaan di luar domain kesehatan, mohon beri tahu bahwa Anda "
+    "fokus pada edukasi kesehatan dan arahkan kembali ke topik terkait. Hindari memberikan "
+    "diagnosis medis tertentu; sarankan konsultasi tenaga kesehatan bila perlu."
+)
 
-    stage('Install Node.js & PM2') {
-      steps {
-        sh '''
-          set -eu
-          if command -v pm2 >/dev/null 2>&1; then
-            echo "pm2 already installed: $(pm2 -v)"
-          else
-            if command -v npm >/dev/null 2>&1; then
-              npm install -g pm2
-            elif command -v apt-get >/dev/null 2>&1; then
-              apt-get update -y
-              apt-get install -y nodejs npm
-              npm install -g pm2
-            elif command -v yum >/dev/null 2>&1; then
-              yum install -y nodejs npm || true
-              npm install -g pm2
-            else
-              echo "Node.js/npm tidak ditemukan dan package manager tidak dikenali."
-              exit 1
-            fi
-          fi
-          pm2 -v
-        '''
-      }
-    }
 
-    stage('Run/Reload App with PM2') {
-      steps {
-        withCredentials([
-          string(credentialsId: 'GEMINI_API_KEY', variable: 'GEMINI_API_KEY'),
-          string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')
-        ]) {
-          sh '''
-            set -eu
-            command -v pm2 >/dev/null 2>&1
+def get_gemini_model():
+    """Inisialisasi model Gemini 2.5 Flash"""
+    global _model
+    if _model is not None:
+        return _model
+    if genai is None:
+        print("⚠️ Library google-generativeai belum diinstal.")
+        return None
+    if not GEMINI_API_KEY:
+        print("❌ GEMINI_API_KEY belum dikonfigurasi (cek environment variable).")
+        return None
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        _model = genai.GenerativeModel(
+            model_name="models/gemini-2.5-flash",
+            system_instruction=SYSTEM_INSTRUCTION,
+        )
+        print("✅ Model Gemini berhasil diinisialisasi.")
+        return _model
+    except Exception as e:
+        logger.exception(f"Failed to initialize Gemini model: {e}")
+        print("❌ Gagal inisialisasi Gemini:", e)
+        return None
 
-            . venv/bin/activate
 
-            # Export env for Gunicorn
-            export GEMINI_API_KEY="${GEMINI_API_KEY}"
-            export FONNTE_TOKEN="${FONNTE_TOKEN}"
+def generate_reply(user_message: str) -> str:
+    """Panggil AI Gemini untuk menjawab pesan pengguna"""
+    print(f"\n🚀 [Gemini] Pertanyaan: {user_message}")
+    model = get_gemini_model()
+    fallback = (
+        "Maaf, AI belum siap. Coba lagi nanti ya. "
+        "Sementara itu, untuk hidup sehat: tidur cukup, aktif bergerak, perbanyak sayur/buah, "
+        "kurangi gula/garam, dan minum air putih yang cukup."
+    )
+    if not model:
+        print("❌ Model belum siap (cek API key).")
+        return fallback
+    try:
+        prompt = (
+            "Topik: Edukasi kesehatan (gaya hidup sehat, nutrisi, kebersihan, stunting, gizi anak).\n"
+            "Jika pertanyaan di luar domain, katakan fokus pada edukasi kesehatan dan arahkan kembali.\n"
+            "Jawab ringkas dan praktis.\n\n"
+            f"Pesan pengguna: {user_message}"
+        )
+        resp = model.generate_content(prompt)
+        text = getattr(resp, "text", None)
+        if not text:
+            try:
+                text = resp.candidates[0].content.parts[0].text  # type: ignore
+            except Exception:
+                text = None
+        print("🤖 [Gemini Reply]:", text)
+        return text or "Maaf, saya belum bisa menjawab. Coba ulangi pertanyaannya."
+    except Exception as e:
+        print("❌ [Gemini Error]:", e)
+        logger.exception(f"Gemini generation error: {e}")
+        return (
+            "Maaf, terjadi kendala saat memproses AI. "
+            "Tips cepat: jaga kebersihan tangan, konsumsi makanan bergizi, dan cukup istirahat."
+        )
 
-            echo "Starting app: ${APP_NAME} ..."
-            if pm2 describe "${APP_NAME}" >/dev/null 2>&1; then
-              pm2 reload "${APP_NAME}" --update-env
-            else
-              pm2 start "venv/bin/gunicorn -w 2 -b 0.0.0.0:8000 app:app" --name "${APP_NAME}" --update-env
-            fi
 
-            pm2 save
-            pm2 status
-          '''
-        }
-      }
-    }
-  }
+def send_fonnte_message(target: str, message: str) -> bool:
+    """Kirim pesan ke pengguna via API Fonnte"""
+    if not FONNTE_TOKEN:
+        print("⚠️ FONNTE_TOKEN belum dikonfigurasi (cek environment variable).")
+        return False
+    try:
+        headers = {"Authorization": FONNTE_TOKEN}
+        data = {"target": target, "message": message}
+        r = requests.post(FONNTE_SEND_URL, headers=headers, data=data, timeout=15)
+        ok = r.status_code in (200, 201)
+        if not ok:
+            logger.error(f"Fonnte send failed: {r.status_code} {r.text[:300]}")
+        else:
+            logger.info(f"Fonnte message sent to {target}")
+        return ok
+    except Exception as e:
+        logger.exception(f"Error calling Fonnte API: {e}")
+        return False
 
-  post {
-    success {
-      echo '✅ Build berhasil!'
-      withCredentials([string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')]) {
-        sh '''
-          MSG="✅ *Build Sukses* untuk ${APP_NAME} pada $(date +'%F %T')"
-          MSG="$MSG%0A%0AStatus: SUCCESS"
-          MSG="$MSG%0AHost: $(hostname)"
-          MSG="$MSG%0A"
-          curl -sS -X POST "$FONNTE_SEND_URL" \
-            -H "Authorization: ${FONNTE_TOKEN}" \
-            --data-urlencode "target=${FONNTE_TEST_TARGET}" \
-            --data-urlencode "message=${MSG}"
-        '''
-      }
-    }
 
-    failure {
-      echo '❌ Build gagal!'
-      withCredentials([string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')]) {
-        sh '''
-          MSG="❌ *Build Gagal* untuk ${APP_NAME} pada $(date +'%F %T')"
-          MSG="$MSG%0A%0AStatus: FAILED"
-          MSG="$MSG%0AHost: $(hostname)"
-          MSG="$MSG%0APeriksa log di Jenkins untuk detail error."
-          curl -sS -X POST "$FONNTE_SEND_URL" \
-            -H "Authorization: ${FONNTE_TOKEN}" \
-            --data-urlencode "target=${FONNTE_TEST_TARGET}" \
-            --data-urlencode "message=${MSG}"
-        '''
-      }
-    }
-  }
-}
+# =====================================================
+# 🌐 ROUTES
+# =====================================================
+@app.get("/")
+def health():
+    return jsonify({"ok": True, "service": "whatsapp-health-bot"}), 200
+
+
+@app.post("/webhook")
+def webhook():
+    """Endpoint untuk menerima pesan dari WhatsApp Gateway / Fonnte"""
+    print("📩 Incoming JSON:", request.json)
+    payload = request.get_json(silent=True) or {}
+
+    sender = payload.get("sender") or payload.get("from") or payload.get("number")
+    message = payload.get("message") or payload.get("text")
+
+    if not sender or not message:
+        return jsonify({"ok": False, "error": "Invalid payload"}), 400
+
+    reply = generate_reply(message)
+    sent = send_fonnte_message(sender, reply)
+
+    return jsonify({
+        "ok": True,
+        "sender": sender,
+        "message": message,
+        "reply": reply,
+        "sent": sent
+    }), 200
+
+
+# =====================================================
+# ▶️ Jalankan Server
+# =====================================================
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "8000"))
+    app.run(host="0.0.0.0", port=port, debug=True)
