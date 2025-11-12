@@ -1,22 +1,18 @@
 pipeline {
   agent any
-
-  options {
-    timestamps()
-  }
+  options { timestamps() }
 
   triggers {
-    // Auto build tiap push ke GitHub
-    githubPush()
-    // Fallback polling tiap 2 menit
+    // Poll SCM setiap 2 menit dan aktifkan webhook GitHub
     pollSCM('H/2 * * * *')
+    githubPush()
   }
 
   environment {
-    FONNTE_TEST_TARGET = '62882019908677'
-    FONNTE_SEND_URL = 'https://api.fonnte.com/send'
     APP_NAME = 'whatsapp-health-bot'
     APP_PORT = '8000'
+    FONNTE_SEND_URL = 'https://api.fonnte.com/send'
+    FONNTE_TEST_TARGET = '62882019908677'
   }
 
   stages {
@@ -26,7 +22,7 @@ pipeline {
       }
     }
 
-    stage('Setup Python Env') {
+    stage('Setup Python venv') {
       steps {
         sh '''
           set -eu
@@ -43,29 +39,25 @@ pipeline {
       steps {
         sh '''
           set -eu
-          if command -v pm2 >/dev/null 2>&1; then
-            echo "pm2 already installed: $(pm2 -v)"
-          else
+          if ! command -v pm2 >/dev/null 2>&1; then
+            echo "🔧 Menginstall PM2..."
             if command -v npm >/dev/null 2>&1; then
               npm install -g pm2
             elif command -v apt-get >/dev/null 2>&1; then
               apt-get update -y
               apt-get install -y nodejs npm
               npm install -g pm2
-            elif command -v yum >/dev/null 2>&1; then
-              yum install -y nodejs npm || true
-              npm install -g pm2
             else
-              echo "Node.js/npm tidak ditemukan dan package manager tidak dikenali."
+              echo "❌ Node.js/npm tidak ditemukan dan tidak bisa diinstal."
               exit 1
             fi
           fi
-          pm2 -v
+          echo "✅ PM2 terpasang versi: $(pm2 -v)"
         '''
       }
     }
 
-    stage('Deploy App with PM2') {
+    stage('Deploy App with PM2 (Auto Reload)') {
       steps {
         withCredentials([
           string(credentialsId: 'GEMINI_API_KEY', variable: 'GEMINI_API_KEY'),
@@ -75,41 +67,39 @@ pipeline {
             set -eu
             . venv/bin/activate
 
-            # Simpan environment ke file agar PM2 baca
-            cat > .env <<EOF
-GEMINI_API_KEY=${GEMINI_API_KEY}
-FONNTE_TOKEN=${FONNTE_TOKEN}
-EOF
+            export GEMINI_API_KEY="${GEMINI_API_KEY}"
+            export FONNTE_TOKEN="${FONNTE_TOKEN}"
 
-            echo "🚀 Jalankan atau reload ${APP_NAME}..."
+            echo "🚀 Menjalankan / reload ${APP_NAME}..."
+            if pm2 describe "${APP_NAME}" >/dev/null 2>&1; then
+              pm2 reload "${APP_NAME}" --update-env
+            else
+              pm2 start "venv/bin/gunicorn -w 2 -b 0.0.0.0:${APP_PORT} app:app" \
+                --name "${APP_NAME}" --update-env
+            fi
 
-            # Jalankan PM2 via konfigurasi
-            pm2 startOrReload ecosystem.config.js --update-env
-
-            # Simpan state PM2 agar otomatis start setelah reboot
             pm2 save
-
-            # Tampilkan status
             pm2 status
           '''
         }
       }
     }
 
-    stage('Expose Port & Show IP') {
+    stage('Expose Port & Show Public IP') {
       steps {
         sh '''
-          echo "Membuka port ${APP_PORT}..."
+          echo "🔓 Membuka port ${APP_PORT} untuk akses publik..."
           if command -v ufw >/dev/null 2>&1; then
             sudo ufw allow ${APP_PORT} || true
           elif command -v firewall-cmd >/dev/null 2>&1; then
             sudo firewall-cmd --add-port=${APP_PORT}/tcp --permanent || true
             sudo firewall-cmd --reload || true
+          else
+            echo "⚠️ Firewall manager tidak ditemukan, lewati buka port."
           fi
 
-          echo "Cek IP publik..."
           PUBLIC_IP=$(curl -s ifconfig.me || echo "Tidak bisa ambil IP publik")
-          echo "✅ Webhook aktif di: http://${PUBLIC_IP}:${APP_PORT}/webhook"
+          echo "🌍 Aplikasi aktif di: http://${PUBLIC_IP}:${APP_PORT}/webhook"
         '''
       }
     }
@@ -123,7 +113,7 @@ EOF
           MSG="✅ *Build Sukses* untuk ${APP_NAME} pada $(date +'%F %T')"
           MSG="$MSG%0AStatus: SUCCESS"
           MSG="$MSG%0AHost: $(hostname)"
-          MSG="$MSG%0AService: http://$(curl -s ifconfig.me):${APP_PORT}/webhook"
+          MSG="$MSG%0AURL: http://$(curl -s ifconfig.me):${APP_PORT}/webhook"
           curl -sS -X POST "$FONNTE_SEND_URL" \
             -H "Authorization: ${FONNTE_TOKEN}" \
             --data-urlencode "target=${FONNTE_TEST_TARGET}" \
@@ -139,7 +129,7 @@ EOF
           MSG="❌ *Build Gagal* untuk ${APP_NAME} pada $(date +'%F %T')"
           MSG="$MSG%0AStatus: FAILED"
           MSG="$MSG%0AHost: $(hostname)"
-          MSG="$MSG%0APeriksa log di Jenkins untuk detail error."
+          MSG="$MSG%0APeriksa log Jenkins untuk detail error."
           curl -sS -X POST "$FONNTE_SEND_URL" \
             -H "Authorization: ${FONNTE_TOKEN}" \
             --data-urlencode "target=${FONNTE_TEST_TARGET}" \
