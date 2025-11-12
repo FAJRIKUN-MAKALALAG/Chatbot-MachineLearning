@@ -1,11 +1,12 @@
 # ============================================================
-# 🤖 WhatsApp AI Gizi Anak – Flask Webhook Server
+# 🤖 WhatsApp AI Gizi Anak – Flask Webhook Server (UPDATE)
 # ============================================================
 from flask import Flask, request, jsonify
 import requests
 import google.generativeai as genai
 import logging
 import os
+import re  # 🔹 UPDATE: import regex untuk parsing perintah kirim ke nomor lain
 
 # ------------------------------------------------------------
 # 🔧 KONFIGURASI DASAR
@@ -21,22 +22,16 @@ logging.basicConfig(
     ]
 )
 
-# Gunakan API Key dari environment (diset di Jenkins)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 FONNTE_TOKEN = os.getenv("FONNTE_TOKEN", "")
 
-# Inisialisasi Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
 
 # ------------------------------------------------------------
-# 🧠 FUNGSI RESPON AI (khusus topik gizi anak)
+# 🧠 FUNGSI RESPON AI
 # ------------------------------------------------------------
 def get_ai_response(user_message: str) -> str:
-    """
-    Menghasilkan jawaban AI seputar gizi anak & stunting
-    menggunakan format markdown agar tampil rapi di WhatsApp.
-    """
     try:
         prompt = f"""
 Anda adalah *AI-Gizi-Anak*, asisten edukasi kesehatan anak.
@@ -60,7 +55,7 @@ Pesan pengguna:
         return "_Maaf, sistem sedang sibuk. Coba lagi nanti ya._"
 
 # ------------------------------------------------------------
-# 📤 KIRIM PESAN BALASAN KE FONNTE
+# 📤 KIRIM PESAN KE FONNTE
 # ------------------------------------------------------------
 def send_message_to_fonnte(phone: str, message: str):
     url = "https://api.fonnte.com/send"
@@ -97,7 +92,16 @@ def webhook():
         message_lower = message.lower().strip()
         sapaan = ["halo", "hai", "hallo", "pagi", "siang", "malam", "hey", "hei"]
 
-        if any(word in message_lower for word in sapaan):
+        # 🔹 UPDATE: Cek apakah user minta kirim ke nomor lain
+        pattern = r"kirim pesan ke nomor (\d+) tentang (.+)"
+        match = re.search(pattern, message_lower)
+
+        if match:
+            target_number = match.group(1)
+            message_to_send = match.group(2)
+            send_result = send_message_to_fonnte(target_number, message_to_send)
+            ai_reply = f"✅ Pesan berhasil dikirim ke {target_number}"
+        elif any(word in message_lower for word in sapaan):
             ai_reply = (
                 "👋 Hai! Saya *AI-Gizi-Anak*, asisten edukasi kesehatan.\n\n"
                 "Saya siap bantu kamu memahami seputar *gizi anak, stunting, dan nutrisi seimbang.* "
