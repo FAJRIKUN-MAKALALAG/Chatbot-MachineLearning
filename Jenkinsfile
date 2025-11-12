@@ -6,16 +6,16 @@ pipeline {
   }
 
   triggers {
-    // Poll SCM setiap ~2 menit untuk fallback bila webhook tidak aktif
+    // Poll SCM setiap 2 menit untuk fallback bila webhook tidak aktif
     pollSCM('H/2 * * * *')
-    // Trigger build saat ada push GitHub (butuh GitHub plugin di Jenkins)
     githubPush()
   }
 
   environment {
-    FONNTE_TEST_TARGET = '62882019908677'   // Nomor WhatsApp admin / dev
+    FONNTE_TEST_TARGET = '62882019908677'
     FONNTE_SEND_URL = 'https://api.fonnte.com/send'
     APP_NAME = 'whatsapp-health-bot'
+    APP_PORT = '8000'
   }
 
   stages {
@@ -85,7 +85,6 @@ pipeline {
 
             . venv/bin/activate
 
-            # Export env for Gunicorn
             export GEMINI_API_KEY="${GEMINI_API_KEY}"
             export FONNTE_TOKEN="${FONNTE_TOKEN}"
 
@@ -93,13 +92,34 @@ pipeline {
             if pm2 describe "${APP_NAME}" >/dev/null 2>&1; then
               pm2 reload "${APP_NAME}" --update-env
             else
-              pm2 start "venv/bin/gunicorn -w 2 -b 0.0.0.0:8000 app:app" --name "${APP_NAME}" --update-env
+              pm2 start "venv/bin/gunicorn -w 2 -b 0.0.0.0:${APP_PORT} app:app" --name "${APP_NAME}" --update-env
             fi
 
             pm2 save
             pm2 status
           '''
         }
+      }
+    }
+
+    // ✨ Tambahan stage untuk buka port & tampilkan IP publik
+    stage('Expose Port & Show Public IP') {
+      steps {
+        sh '''
+          echo "Membuka port ${APP_PORT} untuk akses publik..."
+          if command -v ufw >/dev/null 2>&1; then
+            sudo ufw allow ${APP_PORT} || true
+          elif command -v firewall-cmd >/dev/null 2>&1; then
+            sudo firewall-cmd --add-port=${APP_PORT}/tcp --permanent || true
+            sudo firewall-cmd --reload || true
+          else
+            echo "Firewall manager tidak ditemukan, lewati buka port."
+          fi
+
+          echo "Cek IP publik server..."
+          PUBLIC_IP=$(curl -s ifconfig.me || echo "Tidak bisa ambil IP publik")
+          echo "Aplikasi dapat diakses di: http://${PUBLIC_IP}:${APP_PORT}/webhook"
+        '''
       }
     }
   }
@@ -112,7 +132,7 @@ pipeline {
           MSG="✅ *Build Sukses* untuk ${APP_NAME} pada $(date +'%F %T')"
           MSG="$MSG%0A%0AStatus: SUCCESS"
           MSG="$MSG%0AHost: $(hostname)"
-          MSG="$MSG%0A"
+          MSG="$MSG%0AService: http://$(curl -s ifconfig.me):${APP_PORT}"
           curl -sS -X POST "$FONNTE_SEND_URL" \
             -H "Authorization: ${FONNTE_TOKEN}" \
             --data-urlencode "target=${FONNTE_TEST_TARGET}" \
