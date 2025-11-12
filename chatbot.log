@@ -1,1 +1,19 @@
 # Log akan ditulis di file ini saat runtime.
+2025-11-13 02:15:50,215	INFO	WEBHOOK_RAW	{}
+2025-11-13 02:15:50,215	WARNING	Invalid payload (missing sender/message): {}
+2025-11-13 02:16:21,331	INFO	WEBHOOK_RAW	{'sender': '6281234567890', 'message': 'Anak susah makan, tips?'}
+2025-11-13 02:16:21,331	INFO	INCOMING	sender=6281234567890	msg=Anak susah makan, tips?
+2025-11-13 02:16:21,331	ERROR	GEMINI_API_KEY is not configured.
+2025-11-13 02:16:21,331	ERROR	FONNTE_TOKEN is not configured.
+2025-11-13 02:16:21,332	INFO	CONV	6281234567890	Anak susah makan, tips?	Maaf, konfigurasi AI belum siap. Coba lagi nanti ya. Sementara itu, untuk hidup sehat: tidur cukup, aktif bergerak, perbanyak sayur/buah, kurangi gula/garam, dan minum air yang cukup.	FAILED
+2025-11-13 02:21:08,099	INFO	WEBHOOK_RAW	{'sender': '6281234567890', 'message': 'Anak susah makan, tips?'}
+2025-11-13 02:21:08,100	INFO	INCOMING	sender=6281234567890	msg=Anak susah makan, tips?
+2025-11-13 02:21:08,100	ERROR	GEMINI_API_KEY is not configured.
+2025-11-13 02:21:08,100	ERROR	FONNTE_TOKEN is not configured.
+2025-11-13 02:21:08,100	INFO	CONV	6281234567890	Anak susah makan, tips?	Maaf, konfigurasi AI belum siap. Coba lagi nanti ya. Sementara itu, untuk hidup sehat: tidur cukup, aktif bergerak, perbanyak sayur/buah, kurangi gula/garam, dan minum air yang cukup.	FAILED
+2025-11-13 02:22:37,440	INFO	WEBHOOK_RAW	{'sender': '6281234567890', 'message': 'Anak susah makan, tips?'}
+2025-11-13 02:22:37,440	INFO	INCOMING	sender=6281234567890	msg=Anak susah makan, tips?
+2025-11-13 02:22:37,440	ERROR	GEMINI_API_KEY is not configured.
+2025-11-13 02:22:37,440	ERROR	FONNTE_TOKEN is not configured.
+2025-11-13 02:22:37,440	INFO	CONV	6281234567890	Anak susah makan, tips?	Maaf, konfigurasi AI belum siap. Coba lagi nanti ya. Sementara itu, untuk hidup sehat: tidur cukup, aktif bergerak, perbanyak sayur/buah, kurangi gula/garam, dan minum air yang cukup.	FAILED
+2025-11-13 02:26:01,316	INFO	Fonnte message sent to 6281234567890
