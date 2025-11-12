@@ -1,168 +1,142 @@
-import os
-import logging
 from flask import Flask, request, jsonify
 import requests
+import google.generativeai as genai
+import logging
+import os
 
-# =====================================================
-# 🔧 Konfigurasi Aman dari Environment
-# =====================================================
-# Sekarang semua API key diambil dari environment variable
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-FONNTE_TOKEN = os.getenv("FONNTE_TOKEN")
-FONNTE_SEND_URL = "https://api.fonnte.com/send"
-
-# =====================================================
-# 🧠 Konfigurasi Logging
-# =====================================================
-LOG_FILE = "chatbot.log"
-logger = logging.getLogger("whatsapp_health_bot")
-logger.setLevel(logging.INFO)
-_fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
-_fh.setFormatter(logging.Formatter("%(asctime)s\t%(levelname)s\t%(message)s"))
-logger.addHandler(_fh)
-
-# =====================================================
-# 🚀 Inisialisasi Flask
-# =====================================================
+# =======================================
+# 🔧 KONFIGURASI DASAR
+# =======================================
 app = Flask(__name__)
 
-# =====================================================
-# 🧩 Inisialisasi Gemini
-# =====================================================
-try:
-    import google.generativeai as genai
-except Exception:
-    genai = None
-
-_model = None
-
-SYSTEM_INSTRUCTION = (
-    "Anda adalah asisten edukasi kesehatan (gaya hidup sehat, nutrisi, kebersihan, "
-    "stunting, dan gizi anak). Jawab SINGKAT, jelas, dan praktis dalam Bahasa Indonesia "
-    "(sekitar 3–6 kalimat). Berikan langkah yang dapat dipraktikkan, sertakan peringatan "
-    "jika perlu. Jika ada pertanyaan di luar domain kesehatan, mohon beri tahu bahwa Anda "
-    "fokus pada edukasi kesehatan dan arahkan kembali ke topik terkait. Hindari memberikan "
-    "diagnosis medis tertentu; sarankan konsultasi tenaga kesehatan bila perlu."
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("whatsapp-bot.log"),
+        logging.StreamHandler()
+    ]
 )
 
+# Gunakan environment variable (Jenkins / manual)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "ISI_API_KEY_GEMINI")
+FONNTE_TOKEN = os.getenv("FONNTE_TOKEN", "ISI_FONNTE_TOKEN")
 
-def get_gemini_model():
-    """Inisialisasi model Gemini 2.5 Flash"""
-    global _model
-    if _model is not None:
-        return _model
-    if genai is None:
-        print("⚠️ Library google-generativeai belum diinstal.")
-        return None
-    if not GEMINI_API_KEY:
-        print("❌ GEMINI_API_KEY belum dikonfigurasi (cek environment variable).")
-        return None
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash")
+
+# =======================================
+# 🧠 FUNGSI GENERATOR RESPON AI
+# =======================================
+def get_ai_response(user_message: str) -> str:
+    """
+    Dapatkan respon dari Gemini dengan konteks spesifik gizi anak & stunting.
+    Hasil diformat ke markdown agar rapi di WhatsApp.
+    """
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        _model = genai.GenerativeModel(
-            model_name="models/gemini-2.5-flash",
-            system_instruction=SYSTEM_INSTRUCTION,
+        prompt = f"""
+Anda adalah *AI-Gizi-Anak*, asisten edukasi kesehatan yang sopan dan informatif.
+
+🎯 **Fokus Utama:** Gizi anak, stunting, nutrisi balita, pola makan sehat, tumbuh kembang, dan tips parenting sehat.
+
+🧩 **Peraturan:**
+- Jika pertanyaan di luar topik gizi anak atau stunting, jawab dengan sopan: 
+  "Maaf, saya hanya bisa membantu seputar gizi anak dan stunting."
+- Format jawaban menggunakan *markdown* agar mudah dibaca di WhatsApp.
+- Gunakan gaya bahasa sederhana, ramah, dan tetap profesional.
+- Jika user menyapa (seperti 'halo', 'hai', 'pagi', dsb), sambut dengan hangat dan arahkan topik ke gizi anak.
+
+Pesan dari pengguna:
+\"\"\"{user_message}\"\"\"
+"""
+
+        response = model.generate_content(
+            prompt,
+            request_options={"timeout": 15}
         )
-        print("✅ Model Gemini berhasil diinisialisasi.")
-        return _model
+        return response.text.strip()
+
     except Exception as e:
-        logger.exception(f"Failed to initialize Gemini model: {e}")
-        print("❌ Gagal inisialisasi Gemini:", e)
-        return None
+        logging.error(f"⚠️ Error dari Gemini: {e}")
+        return "_Maaf, sistem sedang sibuk. Coba lagi nanti ya._"
 
 
-def generate_reply(user_message: str) -> str:
-    """Panggil AI Gemini untuk menjawab pesan pengguna"""
-    print(f"\n🚀 [Gemini] Pertanyaan: {user_message}")
-    model = get_gemini_model()
-    fallback = (
-        "Maaf, AI belum siap. Coba lagi nanti ya. "
-        "Sementara itu, untuk hidup sehat: tidur cukup, aktif bergerak, perbanyak sayur/buah, "
-        "kurangi gula/garam, dan minum air putih yang cukup."
-    )
-    if not model:
-        print("❌ Model belum siap (cek API key).")
-        return fallback
-    try:
-        prompt = (
-            "Topik: Edukasi kesehatan (gaya hidup sehat, nutrisi, kebersihan, stunting, gizi anak).\n"
-            "Jika pertanyaan di luar domain, katakan fokus pada edukasi kesehatan dan arahkan kembali.\n"
-            "Jawab ringkas dan praktis.\n\n"
-            f"Pesan pengguna: {user_message}"
-        )
-        resp = model.generate_content(prompt)
-        text = getattr(resp, "text", None)
-        if not text:
-            try:
-                text = resp.candidates[0].content.parts[0].text  # type: ignore
-            except Exception:
-                text = None
-        print("🤖 [Gemini Reply]:", text)
-        return text or "Maaf, saya belum bisa menjawab. Coba ulangi pertanyaannya."
-    except Exception as e:
-        print("❌ [Gemini Error]:", e)
-        logger.exception(f"Gemini generation error: {e}")
-        return (
-            "Maaf, terjadi kendala saat memproses AI. "
-            "Tips cepat: jaga kebersihan tangan, konsumsi makanan bergizi, dan cukup istirahat."
-        )
-
-
-def send_fonnte_message(target: str, message: str) -> bool:
-    """Kirim pesan ke pengguna via API Fonnte"""
-    if not FONNTE_TOKEN:
-        print("⚠️ FONNTE_TOKEN belum dikonfigurasi (cek environment variable).")
-        return False
-    try:
-        headers = {"Authorization": FONNTE_TOKEN}
-        data = {"target": target, "message": message}
-        r = requests.post(FONNTE_SEND_URL, headers=headers, data=data, timeout=15)
-        ok = r.status_code in (200, 201)
-        if not ok:
-            logger.error(f"Fonnte send failed: {r.status_code} {r.text[:300]}")
-        else:
-            logger.info(f"Fonnte message sent to {target}")
-        return ok
-    except Exception as e:
-        logger.exception(f"Error calling Fonnte API: {e}")
-        return False
-
-
-# =====================================================
-# 🌐 ROUTES
-# =====================================================
-@app.get("/")
-def health():
-    return jsonify({"ok": True, "service": "whatsapp-health-bot"}), 200
-
-
-@app.post("/webhook")
-def webhook():
-    """Endpoint untuk menerima pesan dari WhatsApp Gateway / Fonnte"""
-    print("📩 Incoming JSON:", request.json)
-    payload = request.get_json(silent=True) or {}
-
-    sender = payload.get("sender") or payload.get("from") or payload.get("number")
-    message = payload.get("message") or payload.get("text")
-
-    if not sender or not message:
-        return jsonify({"ok": False, "error": "Invalid payload"}), 400
-
-    reply = generate_reply(message)
-    sent = send_fonnte_message(sender, reply)
-
-    return jsonify({
-        "ok": True,
-        "sender": sender,
+# =======================================
+# 📤 KIRIM BALASAN KE FONNTE
+# =======================================
+def send_message_to_fonnte(phone: str, message: str):
+    url = "https://api.fonnte.com/send"
+    headers = {"Authorization": FONNTE_TOKEN}
+    data = {
+        "target": phone,
         "message": message,
-        "reply": reply,
-        "sent": sent
-    }), 200
+        "countryCode": "62"
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, data=data, timeout=10)
+        resp.raise_for_status()
+        logging.info(f"✅ Pesan terkirim ke {phone}: {message[:60]}...")
+        return resp.json()
+    except Exception as e:
+        logging.error(f"❌ Gagal kirim pesan ke Fonnte: {e}")
+        return {"sent": False, "error": str(e)}
 
 
-# =====================================================
-# ▶️ Jalankan Server
-# =====================================================
+# =======================================
+# 🌐 ENDPOINT WEBHOOK FONNTE
+# =======================================
+@app.route("/webhook", methods=["GET", "POST"])
+def webhook():
+    if request.method == "GET":
+        logging.info("Fonnte melakukan GET test ke webhook.")
+        return jsonify({"ok": True, "message": "Webhook aktif dan siap menerima data."})
+
+    try:
+        payload = request.get_json(force=True)
+        logging.info(f"📩 Payload masuk: {payload}")
+
+        sender = (
+            payload.get("sender")
+            or payload.get("from")
+            or payload.get("number")
+        )
+        message = (
+            payload.get("message")
+            or payload.get("text")
+        )
+
+        if not sender or not message:
+            logging.warning("⚠️ Payload tidak lengkap.")
+            return jsonify({"ok": False, "error": "Payload tidak valid"}), 400
+
+        message_lower = message.lower().strip()
+
+        # === Respons sapaan langsung ===
+        sapaan = ["halo", "hai", "hallo", "pagi", "siang", "malam", "hey", "hei"]
+        if any(word in message_lower for word in sapaan):
+            ai_reply = (
+                "👋 Hai! Saya *AI-Gizi-Anak*, asisten edukasi kesehatan.\n\n"
+                "Saya bisa bantu kamu memahami seputar *gizi anak, stunting, dan nutrisi seimbang.* "
+                "Silakan tanya apa yang ingin kamu ketahui 😊"
+            )
+        else:
+            ai_reply = get_ai_response(message)
+
+        # Kirim ke user
+        result = send_message_to_fonnte(sender, ai_reply)
+
+        return jsonify({"ok": True, "sent": result}), 200
+
+    except Exception as e:
+        logging.error(f"💥 Error di webhook: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# =======================================
+# 🚀 JALANKAN SERVER
+# =======================================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8000"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    port = int(os.getenv("PORT", 8000))
+    logging.info(f"🚀 WhatsApp AI-Gizi-Anak aktif di port {port}")
+    app.run(host="0.0.0.0", port=port)
