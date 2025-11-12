@@ -27,7 +27,7 @@ FONNTE_TOKEN = os.getenv("FONNTE_TOKEN", "")
 
 # Inisialisasi Gemini
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 # ------------------------------------------------------------
 # 🧠 FUNGSI RESPON AI (khusus topik gizi anak)
