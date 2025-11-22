@@ -3,7 +3,6 @@ pipeline {
   options { timestamps() }
 
   triggers {
-    // Jalankan otomatis saat push dan polling tiap 2 menit
     pollSCM('H/1 * * * *')
     githubPush()
   }
@@ -12,35 +11,39 @@ pipeline {
     APP_NAME = 'whatsapp-health-bot'
     APP_PORT = '8000'
     FONNTE_SEND_URL = 'https://api.fonnte.com/send'
-    FONNTE_TEST_TARGET = '62882019908677' // Nomor WA untuk notifikasi dan tes webhook
+    FONNTE_TEST_TARGET = '62882019908677'
   }
 
   stages {
-    stage('Checkout') {
-      steps {
-        checkout scm
-      }
+    stage('Checkout Code') {
+      steps { checkout scm }
     }
 
     stage('Setup Python Environment') {
       steps {
         sh '''
           set -eu
-          if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
+          echo "🐍 Mengecek Python..."
+          if command -v python3 >/dev/null 2>&1; then PY=python3;
+          elif command -v python >/dev/null 2>&1; then PY=python;
+          else echo "❌ Python tidak ditemukan"; exit 1; fi
+
+          echo "📦 Membuat Virtual Environment..."
           $PY -m venv venv
           . venv/bin/activate
+
           pip install --upgrade pip
           pip install flask requests google-generativeai gunicorn
         '''
       }
     }
 
-    stage('Install Node.js & PM2') {
+    stage('Install PM2 (Node.js)') {
       steps {
         sh '''
           set -eu
           if ! command -v pm2 >/dev/null 2>&1; then
-            echo "🔧 Menginstal PM2..."
+            echo "🔧 Instal PM2 dan Node.js..."
             if command -v npm >/dev/null 2>&1; then
               npm install -g pm2
             elif command -v apt-get >/dev/null 2>&1; then
@@ -49,12 +52,12 @@ pipeline {
               npm install -g pm2
             fi
           fi
-          echo "✅ PM2 versi: $(pm2 -v)"
+          echo "🚀 PM2 version: $(pm2 -v)"
         '''
       }
     }
 
-    stage('Deploy App (PM2 + Gunicorn)') {
+    stage('Deploy App (Gunicorn + PM2)') {
       steps {
         withCredentials([
           string(credentialsId: 'GEMINI_API_KEY', variable: 'GEMINI_API_KEY'),
@@ -63,16 +66,16 @@ pipeline {
           sh '''
             set -eu
             . venv/bin/activate
+
             export GEMINI_API_KEY="${GEMINI_API_KEY}"
             export FONNTE_TOKEN="${FONNTE_TOKEN}"
 
-            echo "🚀 Menjalankan ${APP_NAME}..."
-            if pm2 describe "${APP_NAME}" >/dev/null 2>&1; then
-              pm2 reload "${APP_NAME}" --update-env
-            else
-              pm2 start "venv/bin/gunicorn -w 2 -b 0.0.0.0:${APP_PORT} app:app" \
-                --name "${APP_NAME}" --update-env
-            fi
+            echo "📦 Membersihkan PM2 crash logs..."
+            pm2 delete "${APP_NAME}" || true
+
+            echo "🚀 Menjalankan aplikasi..."
+            pm2 start "venv/bin/gunicorn -w 2 -b 0.0.0.0:${APP_PORT} app:app" \
+              --name "${APP_NAME}" --update-env
 
             pm2 save
             pm2 status
@@ -81,43 +84,34 @@ pipeline {
       }
     }
 
-    stage('Expose Port & Check Public URL') {
+    stage('Expose Firewall & Show Public URL') {
       steps {
         sh '''
           echo "🔓 Membuka port ${APP_PORT}..."
-          if command -v ufw >/dev/null 2>&1; then
-            sudo ufw allow ${APP_PORT} || true
-          elif command -v firewall-cmd >/dev/null 2>&1; then
-            sudo firewall-cmd --add-port=${APP_PORT}/tcp --permanent || true
-            sudo firewall-cmd --reload || true
-          fi
-
-          PUBLIC_IP=$(curl -s ifconfig.me || echo "Tidak bisa ambil IP publik")
-          echo "🌍 URL Aplikasi: http://${PUBLIC_IP}:${APP_PORT}/webhook"
-          echo $PUBLIC_IP > public_ip.txt
+          if command -v ufw >/dev/null 2>&1; then ufw allow ${APP_PORT} || true; fi
+          PUBLIC_IP=$(curl -s ifconfig.me || echo "Tidak dapet IP Publik")
+          echo "🌍 URL: http://${PUBLIC_IP}:${APP_PORT}/webhook"
+          echo "$PUBLIC_IP" > public_ip.txt
         '''
       }
     }
 
-    // ✅ Tahap tambahan: Auto Test Webhook setelah deploy
-    stage('Auto Test Webhook & Notifikasi') {
+    stage('Test Webhook & Send Notification') {
       steps {
         withCredentials([string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')]) {
           sh '''
             PUBLIC_IP=$(cat public_ip.txt)
-            WEBHOOK_URL="http://${PUBLIC_IP}:${APP_PORT}/webhook"
-            echo "🔍 Mengecek webhook di $WEBHOOK_URL..."
+            URL="http://${PUBLIC_IP}:${APP_PORT}/webhook"
 
-            RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$WEBHOOK_URL")
-            if [ "$RESPONSE" = "200" ]; then
-              echo "✅ Webhook aktif dan merespons OK!"
-              STATUS_MSG="Webhook aktif ✅"
+            echo "🔍 Testing: $URL"
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
+            if [ "$STATUS" = "200" ]; then
+              RESULT="Webhook aktif ✓"
             else
-              echo "❌ Webhook tidak merespons (HTTP $RESPONSE)"
-              STATUS_MSG="Webhook tidak merespons ❌ (HTTP $RESPONSE)"
+              RESULT="Webhook gagal (HTTP $STATUS) ✗"
             fi
 
-            MSG="🤖 *Bot WhatsApp Gizi Anak Aktif!*%0AStatus: ${STATUS_MSG}%0AURL: ${WEBHOOK_URL}%0AHost: $(hostname)"
+            MSG="🤖 *Aira (AI Gizi Anak) Aktif!*%0AStatus: ${RESULT}%0AURL: ${URL}%0AHost: $(hostname)"
             curl -sS -X POST "$FONNTE_SEND_URL" \
               -H "Authorization: ${FONNTE_TOKEN}" \
               --data-urlencode "target=${FONNTE_TEST_TARGET}" \
@@ -137,10 +131,7 @@ pipeline {
       echo '❌ Build gagal!'
       withCredentials([string(credentialsId: 'FONNTE_TOKEN', variable: 'FONNTE_TOKEN')]) {
         sh '''
-          MSG="❌ *Build Gagal* untuk ${APP_NAME} pada $(date +'%F %T')"
-          MSG="$MSG%0AStatus: FAILED"
-          MSG="$MSG%0AHost: $(hostname)"
-          MSG="$MSG%0APeriksa log Jenkins untuk detail error."
+          MSG="❌ *Build Gagal* untuk ${APP_NAME}%0AHost: $(hostname)%0APeriksa log Jenkins segera."
           curl -sS -X POST "$FONNTE_SEND_URL" \
             -H "Authorization: ${FONNTE_TOKEN}" \
             --data-urlencode "target=${FONNTE_TEST_TARGET}" \
