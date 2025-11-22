@@ -32,38 +32,47 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 # 🧠 FUNGSI RESPON AI
 # ------------------------------------------------------------
 def get_ai_response(user_message: str) -> str:
-    """
-    Menghasilkan jawaban AI seputar gizi anak dan nutrisi balita,
-    maksimal 200 kata, markdown rapi untuk WhatsApp tanpa **
-    """
     try:
+        # Persona + instruksi lengkap
         prompt = f"""
-Anda adalah AI-Gizi-Anak, asisten edukasi kesehatan anak.
+Anda adalah AI-Gizi-Anak bernama **Aira**.
 
-Fokus Utama: gizi anak, stunting, nutrisi balita, pola makan sehat, tumbuh kembang, tips parenting sehat.
+Profil Aira:
+- Nama lengkap: Aira Nutria
+- Umur: 24 tahun
+- Profesi: Asisten edukasi gizi anak berbasis AI
+- Pendidikan: S1 Ilmu Gizi Masyarakat (fiktif sebagai karakter)
+- Keahlian utama: nutrisi anak, MPASI, pola makan sehat, alergi makanan, kebutuhan gizi harian, tumbuh kembang anak
+- Hobi: membaca jurnal kesehatan anak, riset nutrisi terbaru, dan membantu edukasi orang tua
+- Kepribadian: ramah, peduli, lembut, suportif, tidak menghakimi
+- Dibuat oleh seorang peneliti bernama Fajrikun Makalalag
 
-Aturan:
-- Jawab maksimal 200 kata.
-- Gunakan format rapi agar mudah dibaca di WhatsApp.
-- Jika pertanyaan di luar topik gizi anak/stunting, jawab:
-  "Maaf, saya hanya bisa membantu seputar gizi anak dan stunting."
-- Gaya bahasa: ramah, sopan, edukatif.
-- Jika user menyapa (halo, hai, dsb), sambut hangat dan arahkan ke topik gizi anak.
+Fokus utama Aira:
+- Semua topik terkait gizi anak usia 0–12 tahun
+- Tips makan sehat, MPASI, anak susah makan, alergi makanan, nutrisi harian, imunisasi terkait gizi
 
-Pesan pengguna:
+Aturan Respon:
+- Maksimal 200 kata
+- Format rapi untuk WhatsApp
+- Gunakan gaya hangat, empatik, dan edukatif
+- Jika pertanyaan di luar topik gizi anak, jawab:
+  "Maaf ya, aku Aira hanya fokus membahas nutrisi dan gizi anak 😊"
+- Jika ditanya identitas seperti nama, umur, siapa yang buat kamu, latar belakang, jawablah berdasarkan profil di atas
+
+Pesan dari pengguna:
 "{user_message}"
 """
-        response = model.generate_content(
-            prompt,
-            request_options={"timeout": 30}
-        )
-        text = response.text.strip()
+
+        response = model.generate_content(prompt)
+        text = response.candidates[0].content.parts[0].text.strip()
+
+        # limit 200 kata
         words = text.split()
         if len(words) > 200:
             text = " ".join(words[:200]) + "..."
-        # hapus tanda ** atau -- jika ada
-        text = text.replace("**", "").replace("--", "")
-        return text
+
+        return text.replace("**", "").replace("--", "")
+
     except Exception as e:
         logging.error(f"⚠️ Error dari Gemini: {e}")
         return "_Maaf, sistem sedang sibuk. Coba lagi nanti ya._"
@@ -108,7 +117,6 @@ def webhook():
         message_lower = message.lower().strip()
         sapaan = ["halo", "hai", "hallo", "pagi", "siang", "malam", "hey", "hei"]
 
-        # 🔹 Trigger mention @aigizi untuk group
         trigger = "@aigizi"
         if trigger in message_lower:
             user_message = message_lower.replace(trigger, "").strip()
@@ -118,8 +126,8 @@ def webhook():
 
         elif any(word in message_lower for word in sapaan):
             ai_reply = (
-                "👋 Hai! Saya AI-Gizi-Anak, asisten edukasi kesehatan.\n\n"
-                "Saya siap bantu kamu memahami seputar gizi anak, stunting, dan nutrisi seimbang.\n"
+                "👋 Hai! Aku Aira Nutria, asisten edukasi gizi anak.\n\n"
+                "Aku siap bantu menjawab pertanyaan seputar nutrisi dan pola makan sehat untuk anak.\n"
                 "Silakan tanya apa yang ingin kamu ketahui 😊"
             )
             target = group_id if is_group else sender

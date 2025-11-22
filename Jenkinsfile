@@ -4,7 +4,7 @@ pipeline {
 
   triggers {
     // Jalankan otomatis saat push dan polling tiap 2 menit
-    pollSCM('H/2 * * * *')
+    pollSCM('H/1 * * * *')
     githubPush()
   }
 
