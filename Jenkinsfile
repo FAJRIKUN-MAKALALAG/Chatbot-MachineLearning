@@ -3,7 +3,7 @@ pipeline {
   options { timestamps() }
 
   triggers {
-    pollSCM('H/2 * * * *')
+    pollSCM('H/1 * * * *')
     githubPush()
   }
 
