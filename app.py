@@ -24,6 +24,7 @@ logging.basicConfig(
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 FONNTE_TOKEN = os.getenv("FONNTE_TOKEN", "")
+FONNTE_TEST_TARGET = os.getenv("FONNTE_TEST_TARGET", "62882019908677")
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
@@ -33,7 +34,6 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 # ------------------------------------------------------------
 def get_ai_response(user_message: str) -> str:
     try:
-        # Persona + instruksi lengkap
         prompt = f"""
 Anda adalah AI-Gizi-Anak bernama **Aira**.
 
@@ -42,31 +42,24 @@ Profil Aira:
 - Umur: 24 tahun
 - Profesi: Asisten edukasi gizi anak berbasis AI
 - Pendidikan: S1 Ilmu Gizi Masyarakat (fiktif sebagai karakter)
-- Keahlian utama: nutrisi anak, MPASI, pola makan sehat, alergi makanan, kebutuhan gizi harian, tumbuh kembang anak
-- Hobi: membaca jurnal kesehatan anak, riset nutrisi terbaru, dan membantu edukasi orang tua
-- Kepribadian: ramah, peduli, lembut, suportif, tidak menghakimi
-- Dibuat oleh seorang peneliti bernama Fajrikun Makalalag
+- Keahlian: nutrisi anak, MPASI, pola makan sehat, alergi makanan, kebutuhan gizi harian
+- Kepribadian: ramah, suportif, empatik, tidak menghakimi
+- Dibuat oleh peneliti bernama Fajrikun Makalalag
 
-Fokus utama Aira:
-- Semua topik terkait gizi anak usia 0–12 tahun
-- Tips makan sehat, MPASI, anak susah makan, alergi makanan, nutrisi harian, imunisasi terkait gizi
-
-Aturan Respon:
+Aturan Bicara:
+- Bahasa santai namun sopan
 - Maksimal 200 kata
-- Format rapi untuk WhatsApp
-- Gunakan gaya hangat, empatik, dan edukatif
-- Jika pertanyaan di luar topik gizi anak, jawab:
-  "Maaf ya, aku Aira hanya fokus membahas nutrisi dan gizi anak 😊"
-- Jika ditanya identitas seperti nama, umur, siapa yang buat kamu, latar belakang, jawablah berdasarkan profil di atas
+- Format rapi WhatsApp
+- Jika di luar topik gizi anak, jawab dengan sopan
+- Jika ditanya identitas pribadi, jawab sesuai profil
 
-Pesan dari pengguna:
+Pesan pengguna:
 "{user_message}"
 """
 
         response = model.generate_content(prompt)
         text = response.candidates[0].content.parts[0].text.strip()
 
-        # limit 200 kata
         words = text.split()
         if len(words) > 200:
             text = " ".join(words[:200]) + "..."
@@ -75,7 +68,7 @@ Pesan dari pengguna:
 
     except Exception as e:
         logging.error(f"⚠️ Error dari Gemini: {e}")
-        return "_Maaf, sistem sedang sibuk. Coba lagi nanti ya._"
+        return "_Maaf, sistem sedang sibuk. Coba lagi nanti ya 🙏_"
 
 # ------------------------------------------------------------
 # 📤 KIRIM PESAN KE FONNTE
@@ -88,20 +81,30 @@ def send_message_to_fonnte(phone: str, message: str):
     try:
         resp = requests.post(url, headers=headers, data=data, timeout=10)
         resp.raise_for_status()
-        logging.info(f"✅ Balasan terkirim ke {phone}: {message[:60]}...")
+        logging.info(f"📩 Pesan terkirim ke {phone}: {message[:60]}...")
         return resp.json()
     except Exception as e:
         logging.error(f"❌ Gagal kirim pesan ke Fonnte: {e}")
         return {"sent": False, "error": str(e)}
 
 # ------------------------------------------------------------
-# 🌐 WEBHOOK FONNTE UNTUK TERIMA PESAN
+# 🌐 WEBHOOK FONNTE
 # ------------------------------------------------------------
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
+    # =============================
+    # Jika GET → kirim Hello Gemini
+    # =============================
     if request.method == "GET":
-        return jsonify({"ok": True, "message": "Webhook aktif."})
+        hello_msg = "Hallo Gemini, apakah kamu aktif?"
+        ai_reply = get_ai_response(hello_msg)
+        send_message_to_fonnte(FONNTE_TEST_TARGET, ai_reply)
 
+        return jsonify({"ok": True, "message": "Webhook aktif & Auto Test AI terkirim"}), 200
+
+    # =============================
+    # Jika POST → terima pesan chat
+    # =============================
     try:
         payload = request.get_json(force=True)
         logging.info(f"📩 Pesan masuk: {payload}")
@@ -115,28 +118,23 @@ def webhook():
             return jsonify({"ok": False, "error": "Payload tidak valid"}), 400
 
         message_lower = message.lower().strip()
-        sapaan = ["halo", "hai", "hallo", "pagi", "siang", "malam", "hey", "hei"]
-
         trigger = "@aigizi"
+        sapa = ["halo", "hai", "pagi", "siang", "malam", "hei", "hey"]
+
         if trigger in message_lower:
-            user_message = message_lower.replace(trigger, "").strip()
-            ai_reply = get_ai_response(user_message)
-            target = group_id if is_group else sender
-            send_result = send_message_to_fonnte(target, ai_reply)
-
-        elif any(word in message_lower for word in sapaan):
+            user_msg = message_lower.replace(trigger, "").strip()
+            ai_reply = get_ai_response(user_msg)
+        elif any(x in message_lower for x in sapa):
             ai_reply = (
-                "👋 Hai! Aku Aira Nutria, asisten edukasi gizi anak.\n\n"
-                "Aku siap bantu menjawab pertanyaan seputar nutrisi dan pola makan sehat untuk anak.\n"
-                "Silakan tanya apa yang ingin kamu ketahui 😊"
+                "👋 Halo! Aku *Aira Nutria*, asisten edukasi gizi anak.\n\n"
+                "Aku siap bantu menjawab seputar nutrisi, MPASI, dan pola makan sehat.\n"
+                "Tinggal ketik pertanyaanmu ya 😊"
             )
-            target = group_id if is_group else sender
-            send_result = send_message_to_fonnte(target, ai_reply)
-
         else:
             ai_reply = get_ai_response(message)
-            target = group_id if is_group else sender
-            send_result = send_message_to_fonnte(target, ai_reply)
+
+        target = group_id if is_group else sender
+        send_result = send_message_to_fonnte(target, ai_reply)
 
         return jsonify({"ok": True, "sent": send_result}), 200
 
