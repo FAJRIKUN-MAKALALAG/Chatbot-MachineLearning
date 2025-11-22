@@ -33,7 +33,7 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 # ------------------------------------------------------------
 def get_ai_response(user_message: str) -> str:
     """
-    Menghasilkan jawaban AI seputar gizi anak & stunting
+    Menghasilkan jawaban AI seputar gizi anak dan nutrisi balita,
     maksimal 200 kata, markdown rapi untuk WhatsApp tanpa **
     """
     try:
